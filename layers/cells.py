@@ -15,7 +15,7 @@ from torch.cuda.amp import autocast
 
 
 class Cell(nn.Module):
-    def __init__(self, Cin, Cout, cell_type, arch, temb_in=0, dropout_p=0., apply_attn=False, conditioning_dim=None):
+    def __init__(self, Cin, Cout, cell_type, arch, temb_in=0, dropout_p=0., apply_attn=False):
         super(Cell, self).__init__()
         self.cell_type = cell_type
         stride = get_stride_for_cell_type(self.cell_type)
@@ -30,7 +30,7 @@ class Cell(nn.Module):
             stride = get_stride_for_cell_type(self.cell_type) if i == 0 else 1
             C = Cin if i == 0 else Cout
             primitive = conv_branch[i]
-            op = OPS[primitive](C, Cout, stride, dropout_p, conditioning_dim=conditioning_dim)
+            op = OPS[primitive](C, Cout, stride, dropout_p)
             self._ops.append(op)
 
         # SE
@@ -52,14 +52,7 @@ class Cell(nn.Module):
 
         self.apply_sqrt2 = arch.get('apply_sqrt2', False)
 
-    ## ORIGINAL CODE STARTS ##
-    # def forward(self, s, temb=None):
-    ## ORIGINAL CODE ENDS ##
-
-    ## MY CODE STARTS ##
-    def forward(self, s, c=None):
-    ## MY CODE ENDS ##
-
+    def forward(self, s, temb=None):
         # skip branch
         skip = self.skip(s)
 
@@ -73,14 +66,7 @@ class Cell(nn.Module):
                     temb = self.temb_proj(temb).unsqueeze(-1).unsqueeze(-1)
             else:
                 temb = None
-
-            ## ORIGINAL CODE STARTS ##
-            # s = self._ops[i](s, temb)
-            ## ORIGINAL CODE ENDS ##
-
-            ## MY CODE STARTS ##
-            s = self._ops[i](s, temb, c=c)
-            ## MY CODE ENDS ##
+            s = self._ops[i](s, temb)
 
         # SE
         s = self.se(s) if self.use_se else s

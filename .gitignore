@@ -4,6 +4,7 @@ unused/
 visualizations/
 .idea/
 .run/
+.DS_Store/
 local_use/
 *.pyc
 *.pdf

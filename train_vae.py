@@ -10,8 +10,6 @@ import torch
 import numpy as np
 import os
 
-from PIL.Image import Image
-
 from fid.fid_score import compute_statistics_of_generator, load_statistics, calculate_frechet_distance
 from fid.inception import InceptionV3
 
@@ -37,10 +35,7 @@ def main(args):
 
     arch_instance_nvae = utils.get_arch_cells(args.arch_instance, args.use_se)
     logging.info('args = %s', args)
-    vae = NVAE(args, arch_instance_nvae,
-               conditioning_vars=['object_class'],
-               conditioning_dims={'object_class': 10},
-               embedding_dim=128)
+    vae = NVAE(args, arch_instance_nvae)
     vae = vae.cuda()
 
     logging.info('VAE: param size = %fM ', utils.count_parameters_in_M(vae))
@@ -111,7 +106,7 @@ def main(args):
             n = int(np.floor(np.sqrt(min(16, args.batch_size))))
             num_samples = n ** 2
             for t in [0.7, 1.0]:
-                output_img = vae.sample(num_samples, t, enable_autocast=args.autocast_eval, conditioning_inputs={'object_class': torch.zeros(num_samples).long().cuda()})
+                output_img = vae.sample(num_samples, t, enable_autocast=args.autocast_eval)
                 output_tiled = utils.tile_image(output_img, n)
                 writer.add_image('generated_%0.1f' % t, output_tiled, global_step)
 
@@ -166,7 +161,7 @@ def train_vae(args, train_queue, model, optimizer, grad_scalar, global_step, war
     nelbo = utils.AvgrageMeter()
     model.train()
     for step, x in enumerate(train_queue):
-        x, metadata = utils.common_x_operations(x, args.num_x_bits, retain_metadata=True)
+        x = utils.common_x_operations(x, args.num_x_bits)
 
         # warm-up lr
         if global_step < warmup_iters:
@@ -176,7 +171,7 @@ def train_vae(args, train_queue, model, optimizer, grad_scalar, global_step, war
 
         optimizer.zero_grad()
         with autocast(enabled=args.autocast_train):
-            logits, all_log_q, all_eps = model(x, conditioning_inputs={'object_class': metadata})
+            logits, all_log_q, all_eps = model(x)
             log_q, log_p, kl_all, kl_diag = utils.vae_terms(all_log_q, all_eps)
             output = model.decoder_output(logits)
             kl_coeff = utils.kl_coeff(global_step, args.kl_anneal_portion * args.num_total_iter,
@@ -258,11 +253,11 @@ def test_vae(valid_queue, model, num_samples, args, logging):
     neg_log_p_avg = utils.AvgrageMeter()
     model.eval()
     for step, x in enumerate(valid_queue):
-        x, metadata = utils.common_x_operations(x, args.num_x_bits, retain_metadata=True)
+        x = utils.common_x_operations(x, args.num_x_bits)
         with torch.no_grad():
             nelbo, log_iw = [], []
             for k in range(num_samples):
-                logits, all_log_q, all_eps = model(x, conditioning_inputs={'object_class': metadata})
+                logits, all_log_q, all_eps = model(x)
                 log_q, log_p, kl_all, kl_diag = utils.vae_terms(all_log_q, all_eps)
                 output = model.decoder_output(logits)
                 recon_loss = utils.reconstruction_loss(output, x, crop=model.crop_output)
@@ -290,10 +285,8 @@ def create_generator_vae(model, batch_size, num_total_samples, enable_autocast):
     num_iters = int(np.ceil(num_total_samples / batch_size))
     for i in range(num_iters):
         with torch.no_grad():
-            object_class = torch.zeros(batch_size).long().cuda()
-            image = model.sample(batch_size, 1.0, None, enable_autocast, conditioning_inputs={'object_class': object_class.cuda()})
+            image = model.sample(batch_size, 1.0, None, enable_autocast)
         yield image.float()
-
 
 
 def test_vae_fid(model, args, total_fid_samples):
@@ -334,11 +327,11 @@ def infer_active_variables(train_queue, vae, args, max_iter=None):
         if max_iter is not None and step > max_iter:
             break
 
-        x, metadata = utils.common_x_operations(x, args.num_x_bits, retain_metadata=True)
+        x = utils.common_x_operations(x, args.num_x_bits)
         with autocast(enabled=args.autocast_train):
             # apply vae:
             with torch.set_grad_enabled(False):
-                _, all_log_q, all_eps = vae(x, conditioning_inputs={'object_class': metadata})
+                _, all_log_q, all_eps = vae(x)
                 all_eps = vae.concat_eps_per_scale(all_eps)
                 all_log_q = vae.concat_eps_per_scale(all_log_q)
                 log_q, log_p, kl_all, kl_diag = utils.vae_terms(all_log_q, all_eps)

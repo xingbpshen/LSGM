@@ -21,22 +21,11 @@ BN_EPS = 1e-5
 SYNC_BN = True
 
 OPS = OrderedDict([
-    ## ORIGINAL CODE STARTS ##
-    # ('res_bnswish', lambda Cin, Cout, stride, dropout: BNSwishConv(Cin, Cout, 3, stride, 1)),
-    ## ORIGINAL CODE ENDS ##
-    ## MY CODE STARTS ##
-    ('res_bnswish', lambda Cin, Cout, stride, dropout, conditioning_dim: BNSwishConv(Cin, Cout, 3, stride, 1, conditioning_dim=conditioning_dim)),
-    ## MY CODE ENDS ##
+    ('res_bnswish', lambda Cin, Cout, stride, dropout: BNSwishConv(Cin, Cout, 3, stride, 1)),
     ('res_bnswish_x2', lambda Cin, Cout, stride, dropout: BNSwishConvX2(Cin, Cout, 3, stride, 1)),
     ('res_gnswish_x2', lambda Cin, Cout, stride, dropout: GNSwishConv(Cin, Cout, 3, stride, 1, 1, dropout)),
-    ## ORIGINAL CODE STARTS ##
-    # ('mconv_e6k5g0', lambda Cin, Cout, stride, dropout: InvertedResidual(Cin, Cout, stride, ex=6, dil=1, k=5, g=0)),
-    # ('mconv_e3k5g0', lambda Cin, Cout, stride, dropout: InvertedResidual(Cin, Cout, stride, ex=3, dil=1, k=5, g=0)),
-    ## ORIGINAL CODE ENDS ##
-    ## MY CODE STARTS ##
-    ('mconv_e6k5g0', lambda Cin, Cout, stride, dropout, conditioning_dim: InvertedResidual(Cin, Cout, stride, ex=6, dil=1, k=5, g=0, conditioning_dim=conditioning_dim)),
-    ('mconv_e3k5g0', lambda Cin, Cout, stride, dropout, conditioning_dim: InvertedResidual(Cin, Cout, stride, ex=3, dil=1, k=5, g=0, conditioning_dim=conditioning_dim)),
-    ## MY CODE ENDS ##
+    ('mconv_e6k5g0', lambda Cin, Cout, stride, dropout: InvertedResidual(Cin, Cout, stride, ex=6, dil=1, k=5, g=0)),
+    ('mconv_e3k5g0', lambda Cin, Cout, stride, dropout: InvertedResidual(Cin, Cout, stride, ex=3, dil=1, k=5, g=0)),
     ('mconv_e6k5g0_gn', lambda Cin, Cout, stride, dropout: InvertedResidualGN(Cin, Cout, stride, ex=6, dil=1, k=5, g=0)),
     ('attn', lambda Cin, Cout, stride, dropout: Attention(Cin))
 ])
@@ -159,48 +148,18 @@ class SyncBatchNorm(nn.Module):
         return self.bn(x)
 
 
-## ORIGINAL CODE STARTS ##
-# class GroupNormSwish(nn.Module):
-#     def __init__(self, C_in, eps=BN_EPS, checkpointing=False):  #  checkpointing=True
-#         super(GroupNormSwish, self).__init__()
-#         self.bn_swish = nn.Sequential(get_groupnorm(C_in, eps),
-#                                       Swish())
-#         self.checkpointing = checkpointing
-#
-#     def forward(self, x):
-#         if self.checkpointing:
-#             return checkpoint(self.bn_swish, x, preserve_rng_state=False)
-#         else:
-#             return self.bn_swish(x)
-## ORIGINAL CODE ENDS ##
-
-## MY CODE STARTS ##
 class GroupNormSwish(nn.Module):
-    def __init__(self, C_in, conditioning_dim=None, eps=BN_EPS, checkpointing=False):
+    def __init__(self, C_in, eps=BN_EPS, checkpointing=False):  #  checkpointing=True
         super(GroupNormSwish, self).__init__()
-        num_groups = C_in // 16
-        if conditioning_dim is not None:
-            self.gn = ConditionalGroupNorm(num_groups, C_in, conditioning_dim, eps=eps)
-        else:
-            self.gn = nn.GroupNorm(num_groups, C_in, eps=eps)
-        self.swish = Swish()
+        self.bn_swish = nn.Sequential(get_groupnorm(C_in, eps),
+                                      Swish())
         self.checkpointing = checkpointing
 
-    def forward(self, x, c=None):
+    def forward(self, x):
         if self.checkpointing:
-            if c is not None:
-                x = checkpoint(self.gn, x, c, preserve_rng_state=False)
-            else:
-                x = checkpoint(self.gn, x, preserve_rng_state=False)
-            x = checkpoint(self.swish, x, preserve_rng_state=False)
+            return checkpoint(self.bn_swish, x, preserve_rng_state=False)
         else:
-            if c is not None:
-                x = self.gn(x, c)
-            else:
-                x = self.gn(x)
-            x = self.swish(x)
-        return x
-## MY CODE ENDS ##
+            return self.bn_swish(x)
 
 
 # quick switch between multi-gpu, single-gpu batch norm
@@ -217,54 +176,24 @@ def get_groupnorm(C_in, eps=BN_EPS):
     return nn.GroupNorm(num_groups=C_in // num_c_per_group, num_channels=C_in, eps=eps)
 
 
-## ORIGINAL CODE STARTS ##
-# class BNSwishConv(nn.Module):
-#     def __init__(self, C_in, C_out, kernel_size, stride=1, padding=0, dilation=1):
-#         super(BNSwishConv, self).__init__()
-#         self.upsample = stride == -1
-#         stride = abs(stride)
-#         self.bn_act = SyncBatchNormSwish(C_in, eps=BN_EPS, momentum=0.05)
-#         self.conv_0 = Conv2D(C_in, C_out, kernel_size, stride=stride, padding=padding, bias=True, dilation=dilation)
-#
-#     def forward(self, x, temb=None):
-#         """
-#         Args:
-#             x (torch.Tensor): of size (B, C_in, H, W)
-#         """
-#         out = self.bn_act(x)
-#         if self.upsample:
-#             out = F.interpolate(out, scale_factor=2, mode='nearest')
-#         out = self.conv_0(out)
-#         return out
-## ORIGINAL CODE ENDS ##
-
-## MY CODE STARTS ##
 class BNSwishConv(nn.Module):
-    def __init__(self, C_in, C_out, kernel_size, stride=1, padding=0, dilation=1, conditioning_dim=None):
+    def __init__(self, C_in, C_out, kernel_size, stride=1, padding=0, dilation=1):
         super(BNSwishConv, self).__init__()
         self.upsample = stride == -1
         stride = abs(stride)
-        if conditioning_dim is not None:
-            self.bn = ConditionalBatchNorm2d(C_in, conditioning_dim, eps=BN_EPS, momentum=0.05)
-        else:
-            self.bn = get_batchnorm(C_in, eps=BN_EPS, momentum=0.05)
-        self.swish = Swish()
-        self.conv_0 = Conv2D(C_in, C_out, kernel_size, stride=stride, padding=padding,
-                             bias=True, dilation=dilation)
-        self.conditioning_dim = conditioning_dim
+        self.bn_act = SyncBatchNormSwish(C_in, eps=BN_EPS, momentum=0.05)
+        self.conv_0 = Conv2D(C_in, C_out, kernel_size, stride=stride, padding=padding, bias=True, dilation=dilation)
 
-    def forward(self, x, temb=None, c=None):
-        out = x
-        if self.conditioning_dim is not None and c is not None:
-            out = self.bn(out, c)
-        else:
-            out = self.bn(out)
-        out = self.swish(out)
+    def forward(self, x, temb=None):
+        """
+        Args:
+            x (torch.Tensor): of size (B, C_in, H, W)
+        """
+        out = self.bn_act(x)
         if self.upsample:
             out = F.interpolate(out, scale_factor=2, mode='nearest')
         out = self.conv_0(out)
         return out
-## MY CODE ENDS ##
 
 
 class BNSwishConvX2(nn.Module):
@@ -408,51 +337,18 @@ class DenoisingDecCombinerCell(nn.Module):
         return out
 
 
-## ORIGINAL CODE STARTS ##
-# class ConvBNSwish(nn.Module):
-#     def __init__(self, Cin, Cout, k=3, stride=1, groups=1, dilation=1):
-#         padding = dilation * (k - 1) // 2
-#         super(ConvBNSwish, self).__init__()
-#
-#         self.conv = nn.Sequential(
-#             Conv2D(Cin, Cout, k, stride, padding, groups=groups, bias=False, dilation=dilation, weight_norm=False),
-#             SyncBatchNormSwish(Cout, eps=BN_EPS, momentum=0.05)  # drop in replacement for BN + Swish
-#         )
-#
-#     def forward(self, x):
-#         return self.conv(x)
-## ORIGINAL CODE ENDS ##
-
-## MY CODE STARTS ##
 class ConvBNSwish(nn.Module):
-    def __init__(self, Cin, Cout, k=3, stride=1, groups=1, dilation=1, conditioning_dim=None):
+    def __init__(self, Cin, Cout, k=3, stride=1, groups=1, dilation=1):
         padding = dilation * (k - 1) // 2
         super(ConvBNSwish, self).__init__()
 
-        if conditioning_dim is not None:
-            self.conv = nn.Sequential(
-                Conv2D(Cin, Cout, k, stride, padding, groups=groups, bias=False,
-                       dilation=dilation, weight_norm=False),
-                ConditionalBatchNorm2d(Cout, conditioning_dim, eps=BN_EPS, momentum=0.05),
-                Swish()
-            )
-        else:
-            self.conv = nn.Sequential(
-                Conv2D(Cin, Cout, k, stride, padding, groups=groups, bias=False,
-                       dilation=dilation, weight_norm=False),
-                SyncBatchNormSwish(Cout, eps=BN_EPS, momentum=0.05)
-            )
-        self.conditioning_dim = conditioning_dim
+        self.conv = nn.Sequential(
+            Conv2D(Cin, Cout, k, stride, padding, groups=groups, bias=False, dilation=dilation, weight_norm=False),
+            SyncBatchNormSwish(Cout, eps=BN_EPS, momentum=0.05)  # drop in replacement for BN + Swish
+        )
 
-    def forward(self, x, c=None):
-        if self.conditioning_dim is not None and c is not None:
-            x = self.conv[0](x)
-            x = self.conv[1](x, c)
-            x = self.conv[2](x)
-        else:
-            x = self.conv(x)
-        return x
-## MY CODE ENDS ##
+    def forward(self, x):
+        return self.conv(x)
 
 
 class ConvGNSwish(nn.Module):
@@ -488,82 +384,30 @@ class SE(nn.Module):
         return x * se
 
 
-## ORIGINAL CODE STARTS ##
-# class InvertedResidual(nn.Module):
-#     def __init__(self, Cin, Cout, stride, ex, dil, k, g):
-#         super(InvertedResidual, self).__init__()
-#         self.stride = stride
-#         assert stride in [1, 2, -1]
-#
-#         hidden_dim = int(round(Cin * ex))
-#         self.use_res_connect = self.stride == 1 and Cin == Cout
-#         self.upsample = self.stride == -1
-#         self.stride = abs(self.stride)
-#         groups = hidden_dim if g == 0 else g
-#
-#         layers0 = [nn.UpsamplingNearest2d(scale_factor=2)] if self.upsample else []
-#         layers = [get_batchnorm(Cin, eps=BN_EPS, momentum=0.05),
-#                   ConvBNSwish(Cin, hidden_dim, k=1),
-#                   ConvBNSwish(hidden_dim, hidden_dim, stride=self.stride, groups=groups, k=k, dilation=dil),
-#                   Conv2D(hidden_dim, Cout, 1, 1, 0, bias=False, weight_norm=False),
-#                   get_batchnorm(Cout, momentum=0.05)]
-#
-#         layers0.extend(layers)
-#         self.conv = nn.Sequential(*layers0)
-#
-#     def forward(self, x, temb=None):
-#         return self.conv(x)
-## ORIGINAL CODE ENDS ##
-
-## MY CODE STARTS ##
 class InvertedResidual(nn.Module):
-    def __init__(self, Cin, Cout, stride, ex, dil, k, g, conditioning_dim=None):
+    def __init__(self, Cin, Cout, stride, ex, dil, k, g):
         super(InvertedResidual, self).__init__()
         self.stride = stride
         assert stride in [1, 2, -1]
 
-        self.hidden_dim = int(round(Cin * ex))
+        hidden_dim = int(round(Cin * ex))
         self.use_res_connect = self.stride == 1 and Cin == Cout
         self.upsample = self.stride == -1
         self.stride = abs(self.stride)
-        groups = self.hidden_dim if g == 0 else g
+        groups = hidden_dim if g == 0 else g
 
-        self.conditioning_dim = conditioning_dim
-
-        # Layers for upsampling if needed
         layers0 = [nn.UpsamplingNearest2d(scale_factor=2)] if self.upsample else []
-
-        # Conditional BatchNorm layers
-        if self.conditioning_dim is not None:
-            bn1 = ConditionalBatchNorm2d(Cin, conditioning_dim, eps=BN_EPS, momentum=0.05)
-            bn2 = ConditionalBatchNorm2d(Cout, conditioning_dim, eps=BN_EPS, momentum=0.05)
-        else:
-            bn1 = get_batchnorm(Cin, eps=BN_EPS, momentum=0.05)
-            bn2 = get_batchnorm(Cout, eps=BN_EPS, momentum=0.05)
-
-        # Define the layers
-        layers = [
-            bn1,
-            ConvBNSwish(Cin, self.hidden_dim, k=1, conditioning_dim=self.conditioning_dim),
-            ConvBNSwish(self.hidden_dim, self.hidden_dim, stride=self.stride, groups=groups, k=k, dilation=dil, conditioning_dim=self.conditioning_dim),
-            Conv2D(self.hidden_dim, Cout, 1, 1, 0, bias=False, weight_norm=False),
-            bn2
-        ]
+        layers = [get_batchnorm(Cin, eps=BN_EPS, momentum=0.05),
+                  ConvBNSwish(Cin, hidden_dim, k=1),
+                  ConvBNSwish(hidden_dim, hidden_dim, stride=self.stride, groups=groups, k=k, dilation=dil),
+                  Conv2D(hidden_dim, Cout, 1, 1, 0, bias=False, weight_norm=False),
+                  get_batchnorm(Cout, momentum=0.05)]
 
         layers0.extend(layers)
         self.conv = nn.Sequential(*layers0)
 
-    def forward(self, x, temb=None, c=None):
-        out = x
-        for layer in self.conv:
-            if isinstance(layer, ConditionalBatchNorm2d):
-                out = layer(out, c)
-            elif isinstance(layer, ConvBNSwish):
-                out = layer(out, c)
-            else:
-                out = layer(out)
-        return out
-## MY CODE ENDS ##
+    def forward(self, x, temb=None):
+        return self.conv(x)
 
 
 class InvertedResidualGN(nn.Module):
@@ -679,38 +523,3 @@ class IdentityWithBackwardClipNorm(torch.autograd.Function):
 
 def identity_with_backward_clip_norm(x, cutoff):
     return IdentityWithBackwardClipNorm.apply(x, cutoff)
-
-
-## MY CODE STARTS ##
-class ConditionalBatchNorm2d(nn.Module):
-    def __init__(self, num_features, conditioning_dim, eps=1e-5, momentum=0.05):
-        super(ConditionalBatchNorm2d, self).__init__()
-        self.num_features = num_features
-        self.bn = nn.BatchNorm2d(num_features, affine=False, eps=eps, momentum=momentum)
-        self.gamma = nn.Linear(conditioning_dim, num_features)
-        self.beta = nn.Linear(conditioning_dim, num_features)
-
-    def forward(self, x, c):
-        out = self.bn(x)
-        gamma = self.gamma(c).unsqueeze(2).unsqueeze(3)
-        beta = self.beta(c).unsqueeze(2).unsqueeze(3)
-        out = gamma * out + beta
-        return out
-
-
-class ConditionalGroupNorm(nn.Module):
-    def __init__(self, num_groups, num_channels, conditioning_dim, eps=1e-5):
-        super(ConditionalGroupNorm, self).__init__()
-        self.num_channels = num_channels
-        self.gn = nn.GroupNorm(num_groups, num_channels, eps=eps, affine=False)
-        self.gamma = nn.Linear(conditioning_dim, num_channels)
-        self.beta = nn.Linear(conditioning_dim, num_channels)
-
-    def forward(self, x, c):
-        print('function name: ConditionalGroupNorm')
-        out = self.gn(x)
-        gamma = self.gamma(c).unsqueeze(2).unsqueeze(3)
-        beta = self.beta(c).unsqueeze(2).unsqueeze(3)
-        out = gamma * out + beta
-        return out
-## MY CODE ENDS ##
