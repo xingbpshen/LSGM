@@ -800,12 +800,24 @@ def mask_inactive_variables(x, is_active):
     return x
 
 
-def common_x_operations(x, num_x_bits):
-    x = x[0] if len(x) > 1 else x
-    x = x.cuda()
+def common_x_operations(x, num_x_bits, retain_metadata=False):
+    if not retain_metadata:
+        x = x[0] if len(x) > 1 else x
+        x = x.cuda()
 
-    # change bit length
-    x = change_bit_length(x, num_x_bits)
-    x = symmetrize_image_data(x)
+        # change bit length
+        x = change_bit_length(x, num_x_bits)
+        x = symmetrize_image_data(x)
 
-    return x
+        return x
+    else:
+        x1 = x[0] if len(x) > 1 else x
+        x1 = x1.cuda()
+        metadata = x[1]
+        metadata = metadata.cuda()
+
+        # change bit length
+        x1 = change_bit_length(x1, num_x_bits)
+        x1 = symmetrize_image_data(x1)
+
+        return x1, metadata

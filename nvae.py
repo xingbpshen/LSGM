@@ -16,8 +16,25 @@ from util.distributions import Normal, DiscMixLogistic, DiscLogistic, Bernoulli
 
 
 class NVAE(nn.Module):
-    def __init__(self, args, arch_instance):
+    def __init__(self, args, arch_instance, conditioning_vars=None, conditioning_dims=None, embedding_dim=None):
         super(NVAE, self).__init__()
+
+        ## MY CODE STARTS ##
+        # Conditioning variables
+        self.conditioning_vars = conditioning_vars  # A list of variable names, e.g., ['gender', 'hair_color']
+        self.conditioning_dims = conditioning_dims  # A dict mapping variable names to num_classes, e.g., {'gender': 2, 'hair_color': 5}
+        self.embedding_dim = embedding_dim  # The dimension of the embeddings for each variable
+
+        # Create embeddings for each conditioning variable
+        self.embeddings = nn.ModuleDict({
+            var: nn.Embedding(num_classes, self.embedding_dim)
+            for var, num_classes in self.conditioning_dims.items()
+        })
+
+        # Total conditioning dimension
+        self.conditioning_dim = len(self.conditioning_vars) * self.embedding_dim
+        ## MY CODE ENDS ##
+
         self.arch_instance = arch_instance
         self.dataset = args.dataset
         self.crop_output = self.dataset in {'mnist', 'omniglot'}
@@ -79,6 +96,7 @@ class NVAE(nn.Module):
 
         self.image_conditional = self.init_image_conditional(scale_ind)
 
+
     def init_stem(self):
         Cout = self.num_channels_enc
         Cin = 1 if self.dataset in {'mnist', 'omniglot'} else 3
@@ -93,12 +111,12 @@ class NVAE(nn.Module):
                     arch = self.arch_instance['down_pre']
                     num_ci = int(self.num_channels_enc * self.channels_mult[scale_ind])
                     num_co = int(self.num_channels_enc * self.channels_mult[scale_ind + 1])
-                    cell = Cell(num_ci, num_co, cell_type='down_pre', arch=arch)
+                    cell = Cell(num_ci, num_co, cell_type='down_pre', arch=arch, conditioning_dim=self.conditioning_dim)
                     scale_ind += 1
                 else:
                     arch = self.arch_instance['normal_pre']
                     num_c = int(self.num_channels_enc * self.channels_mult[scale_ind])
-                    cell = Cell(num_c, num_c, cell_type='normal_pre', arch=arch)
+                    cell = Cell(num_c, num_c, cell_type='normal_pre', arch=arch, conditioning_dim=self.conditioning_dim)
 
                 pre_process.append(cell)
 
@@ -113,7 +131,7 @@ class NVAE(nn.Module):
                 for c in range(self.num_cell_per_cond_enc):
                     arch = self.arch_instance['normal_enc']
                     num_c = int(self.num_channels_enc * self.channels_mult[scale_ind])
-                    cell = Cell(num_c, num_c, cell_type='normal_enc', arch=arch)
+                    cell = Cell(num_c, num_c, cell_type='normal_enc', arch=arch, conditioning_dim=self.conditioning_dim)
                     enc_tower.append(cell)
 
                 # add encoder combiner
@@ -128,7 +146,7 @@ class NVAE(nn.Module):
                 arch = self.arch_instance['down_enc']
                 num_ci = int(self.num_channels_enc * self.channels_mult[scale_ind])
                 num_co = int(self.num_channels_enc * self.channels_mult[scale_ind + 1])
-                cell = Cell(num_ci, num_co, cell_type='down_enc', arch=arch)
+                cell = Cell(num_ci, num_co, cell_type='down_enc', arch=arch, conditioning_dim=self.conditioning_dim)
                 enc_tower.append(cell)
                 scale_ind += 1
 
@@ -176,7 +194,7 @@ class NVAE(nn.Module):
                 # add residual cells per conditional <r>
                 for c in range(self.num_cell_per_cond_dec):
                     arch = self.arch_instance['normal_dec']
-                    cell = Cell(num_c, num_c, cell_type='normal_dec', arch=arch)
+                    cell = Cell(num_c, num_c, cell_type='normal_dec', arch=arch, conditioning_dim=self.conditioning_dim)
                     dec_tower.append(cell)
 
             # up cells after finishing a scale
@@ -184,7 +202,7 @@ class NVAE(nn.Module):
                 arch = self.arch_instance['up_dec']
                 num_ci = int(self.num_channels_dec * self.channels_mult[scale_ind])
                 num_co = int(self.num_channels_dec * self.channels_mult[scale_ind-1])
-                cell = Cell(num_ci, num_co, cell_type='up_dec', arch=arch)
+                cell = Cell(num_ci, num_co, cell_type='up_dec', arch=arch, conditioning_dim=self.conditioning_dim)
                 dec_tower.append(cell)
                 scale_ind -= 1
 
@@ -200,12 +218,12 @@ class NVAE(nn.Module):
                     arch = self.arch_instance['up_post']
                     num_ci = int(self.num_channels_dec * self.channels_mult[scale_ind])
                     num_co = int(self.num_channels_dec * self.channels_mult[scale_ind-1])
-                    cell = Cell(num_ci, num_co, cell_type='up_post', arch=arch)
+                    cell = Cell(num_ci, num_co, cell_type='up_post', arch=arch, conditioning_dim=self.conditioning_dim)
                     scale_ind -= 1
                 else:
                     arch = self.arch_instance['normal_post']
                     num_c = int(self.num_channels_dec * self.channels_mult[scale_ind])
-                    cell = Cell(num_c, num_c, cell_type='normal_post', arch=arch)
+                    cell = Cell(num_c, num_c, cell_type='normal_post', arch=arch, conditioning_dim=self.conditioning_dim)
 
                 post_process.append(cell)
 
@@ -225,12 +243,95 @@ class NVAE(nn.Module):
         return nn.Sequential(nn.ELU(),
                              Conv2D(C_in, C_out, 3, padding=1, bias=True))
 
-    def forward(self, x):
+    ## ORIGINAL CODE STARTS ##
+    # def forward(self, x):
+    #     s = self.stem(x)
+    #
+    #     # perform pre-processing
+    #     for cell in self.pre_process:
+    #         s = cell(s)
+    #
+    #     if self.progressive_input == 'input_skip':
+    #         input_pyramid = s
+    #         progressive_input_index = 0
+    #
+    #     # run the main encoder tower
+    #     combiner_cells_enc = []
+    #     combiner_cells_s = []
+    #     for cell in self.enc_tower:
+    #         if cell.cell_type == 'combiner_enc':
+    #             combiner_cells_enc.append(cell)
+    #             combiner_cells_s.append(s)
+    #         else:
+    #             s = cell(s)
+    #             # apply progressive input after downsampling
+    #             if cell.cell_type == 'down_enc' and self.progressive_input == 'input_skip':
+    #                 # update input_pyramid and mix it with s
+    #                 s, input_pyramid = self.progressive_input_cells[progressive_input_index](s, input_pyramid)
+    #                 progressive_input_index += 1
+    #
+    #     # reverse combiner cells and their input for decoder
+    #     combiner_cells_enc.reverse()
+    #     combiner_cells_s.reverse()
+    #
+    #     idx_dec, nf_offset = 0, 0
+    #     all_q, all_log_q, all_eps = [], [], []
+    #     ftr_enc = s
+    #     batch_size = s.shape[0]
+    #     s = self.prior_ftr0.unsqueeze(0)
+    #     s = s.expand(batch_size, -1, -1, -1)
+    #     for cell in self.dec_tower:
+    #         if cell.cell_type == 'combiner_dec':
+    #             # form the encoder
+    #             if idx_dec > 0:
+    #                 ftr_enc = combiner_cells_enc[idx_dec - 1](combiner_cells_s[idx_dec - 1], s)
+    #
+    #             param = self.enc_sampler[idx_dec](ftr_enc)
+    #             mu_q, log_sig_q = torch.chunk(param, 2, dim=1)
+    #             mu_q, log_sig_q = soft_clamp5(mu_q), soft_clamp(log_sig_q, self.log_sig_q_scale)
+    #             dist = Normal(mu_q, log_sig_q)
+    #             eps, _ = dist.sample()
+    #             log_q_conv = dist.log_p(eps)
+    #             # apply NF
+    #             for n in range(self.num_flows):
+    #                 eps, log_det = self.nf_cells[nf_offset + n](eps, ftr_enc)
+    #                 log_q_conv -= log_det
+    #
+    #             nf_offset += self.num_flows
+    #             all_log_q.append(log_q_conv)
+    #             all_q.append(dist)
+    #             all_eps.append(eps)
+    #
+    #             z = self.eps_conv[idx_dec](eps)
+    #             # 'combiner_dec'
+    #             s = cell(s, z)
+    #             idx_dec += 1
+    #         else:
+    #             # main decoder tower
+    #             s = cell(s)
+    #
+    #     for cell in self.post_process:
+    #         s = cell(s)
+    #
+    #     logits = self.image_conditional(s)
+    #
+    #     return logits, all_log_q, all_eps
+    ## ORIGINAL CODE ENDS ##
+
+    ## MY CODE STARTS ##
+    def forward(self, x, conditioning_inputs):
+        # x: input data
+        # conditioning_inputs: a dict of {variable_name: tensor}
+
+        # Compute conditioning vector
+        embeddings = [self.embeddings[var](conditioning_inputs[var]) for var in self.conditioning_vars]
+        c = torch.cat(embeddings, dim=1)  # Shape: [batch_size, conditioning_dim]
+
         s = self.stem(x)
 
-        # perform pre-processing
+        # Perform pre-processing
         for cell in self.pre_process:
-            s = cell(s)
+            s = cell(s, c=c)
 
         if self.progressive_input == 'input_skip':
             input_pyramid = s
@@ -244,7 +345,7 @@ class NVAE(nn.Module):
                 combiner_cells_enc.append(cell)
                 combiner_cells_s.append(s)
             else:
-                s = cell(s)
+                s = cell(s, c=c)
                 # apply progressive input after downsampling
                 if cell.cell_type == 'down_enc' and self.progressive_input == 'input_skip':
                     # update input_pyramid and mix it with s
@@ -289,17 +390,60 @@ class NVAE(nn.Module):
                 idx_dec += 1
             else:
                 # main decoder tower
-                s = cell(s)
+                s = cell(s, c=c)
 
         for cell in self.post_process:
-            s = cell(s)
+            s = cell(s, c=c)
 
         logits = self.image_conditional(s)
 
         return logits, all_log_q, all_eps
+    ## MY CODE ENDS ##
 
-    def sample(self, num_samples, t, eps_z=None, enable_autocast=False):
+    # def sample(self, num_samples, t, eps_z=None, enable_autocast=False):
+    #     with torch.no_grad():
+    #         with autocast(enable_autocast):
+    #             num_eps_z_given = len(eps_z) if eps_z is not None else 0
+    #
+    #             # z = self.eps_conv[0](eps)
+    #             s = self.prior_ftr0.unsqueeze(0)
+    #             s = s.expand(num_samples, -1, -1, -1)
+    #             idx_dec = 0
+    #             for cell in self.dec_tower:
+    #                 if cell.cell_type == 'combiner_dec':
+    #                     if idx_dec < num_eps_z_given:
+    #                         eps = eps_z[idx_dec]
+    #                     else:
+    #                         b, _, h, w = s.shape
+    #                         size = [b, self.num_latent_per_group, h, w]
+    #                         dist = Normal(mu=torch.zeros(size=size, device='cuda'),
+    #                                       log_sigma=torch.zeros(size=size, device='cuda'))
+    #                         eps, _ = dist.sample(t=t)
+    #
+    #                     z = self.eps_conv[idx_dec](eps)
+    #                     s = cell(s, z)
+    #                     idx_dec += 1
+    #                 else:
+    #                     # main decoder tower
+    #                     s = cell(s)
+    #
+    #             for cell in self.post_process:
+    #                 s = cell(s)
+    #
+    #             logits = self.image_conditional(s)
+    #
+    #             output = self.decoder_output(logits)
+    #             output_img = output.mean()
+    #             output_img = output_img.clamp(min=-1., max=1.)
+    #             output_img = unsymmetrize_image_data(output_img)
+    #     return output_img
+    def sample(self, num_samples, t, eps_z=None, enable_autocast=False, conditioning_inputs=None):
         with torch.no_grad():
+            if conditioning_inputs is None:
+                raise ValueError('Conditioning inputs must be provided in def sample(self, num_samples, ...).')
+            # Compute conditioning vector
+            embeddings = [self.embeddings[var](conditioning_inputs[var]) for var in self.conditioning_vars]
+            c = torch.cat(embeddings, dim=1)  # Shape: [batch_size, conditioning_dim]
             with autocast(enable_autocast):
                 num_eps_z_given = len(eps_z) if eps_z is not None else 0
 
@@ -323,10 +467,10 @@ class NVAE(nn.Module):
                         idx_dec += 1
                     else:
                         # main decoder tower
-                        s = cell(s)
+                        s = cell(s, c=c)
 
                 for cell in self.post_process:
-                    s = cell(s)
+                    s = cell(s, c=c)
 
                 logits = self.image_conditional(s)
 
