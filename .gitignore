@@ -5,6 +5,6 @@ visualizations/
 .idea/
 .run/
 local_use/
-.DS_Store/
 *.pyc
 *.pdf
+.DS_Store
